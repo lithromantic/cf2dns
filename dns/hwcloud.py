@@ -4,27 +4,34 @@
 # Github: https://github.com/ravizhan
 # Mail: ravizhan@hotmail.com
 # Reference: https://apiexplorer.developer.huaweicloud.com/apiexplorer/doc?product=DNS
+
+# 改起来真的是费力不讨好，不如直接用官方提供的sdk：https://sdkcenter.developer.huaweicloud.com/zh-cn?product=%E4%BA%91%E8%A7%A3%E6%9E%90%E6%9C%8D%E5%8A%A1&language=python
+
 import json
 import requests
-import signer
+import os,sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+import hwsigner as signer
+from urllib.error import HTTPError
 
 
 # 所有函数请求成功会返回success或相关数据，失败则会返回接口返回的原始数据
 # 所有参数值均限定数据类型
-class Hwcloud:
+class HWCloudApi:
     # 定义AK，SK，实例化鉴权SDK
     # AK SK生成: https://support.huaweicloud.com/devg-apisign/api-sign-provide-aksk.html
-    def __init__(self, AK, SK):
+    def __init__(self):
         self.sign = signer.Signer()
-        self.sign.Key = AK
-        self.sign.Secret = SK
+        self.sign.Key = os.environ["HW_ACCESSKEY_ID"]
+        self.sign.Secret = os.environ["HW_ACCESSKEY_SECRET"]
+
 
     # 获取域名的zone_id，供其他函数调用
-    def get_zone_id(self, domain: str):
+    def get_zone_id(self, domain):
         url = 'https://dns.myhuaweicloud.com/v2/zones?type=public'
         r = signer.HttpRequest('GET', url)
         self.sign.Sign(r)
-        res = json.loads(requests.get(url, headers=r.headers).text)
+        res = json.loads(requests.get(url, headers=r.headers).content.decode('utf-8','ignore'))
         # print(res)
         zone_id = ''
         for i in range(0, len(res['zones'])):
@@ -36,7 +43,7 @@ class Hwcloud:
             return "The domain doesn't exist"
 
     # 删除解析记录，domain为主域名，record为解析记录的id，该id可用get_record函数取得.
-    def del_record(self, domain: str, record: str):
+    def del_record(self, domain, record):
         zone_id = self.get_zone_id(domain)
         if zone_id != "The domain doesn't exist":
             url = 'https://dns.myhuaweicloud.com/v2/zones/' + zone_id + '/recordsets/' + record
@@ -44,16 +51,43 @@ class Hwcloud:
             return "The domain doesn't exist"
         r = signer.HttpRequest('DELETE', url)
         self.sign.Sign(r)
-        res = json.loads(requests.delete(url, headers=r.headers).text)
-        # print(res['status'])
+        
+        #替换为标准格式
+        # {
+        #   "result":True,
+        #   "message":{...}
+        # }
+        resp = requests.delete(url, headers=r.headers)
         try:
-            if res['status'] == 'PENDING_DELETE':
-                return 'success'
+          resp.raise_for_status()
+          res = json.loads(resp.content.decode('utf-8','ignore'))
+        except HTTPError as httpError:
+          response_status_code = httpError.response.status_code
+          #response_header_params = httpError.response.headers
+          #request_id = response_header_params["X-Request-Id"]
+          response_body = httpError.response.text
+          return {
+            "result": False,
+            "message": "错误码：%s，错误描述：%s" % (response_status_code,response_body)
+          }
         except:
-            return res
+          pass
+        # print(res['status'])
+        #try:
+        #    if res['status'] == 'PENDING_DELETE':
+        #        return 'success'
+        #except:
+        #    return res
+        data = {}
+        data["result"] = 'id' in ret
+        data["message"] = res['status']
+        if data["message"] == 'PENDING_DELETE':
+          data["message"] = 'success'
+        #print(data)
+        return data
 
     # 获取解析记录的id，domain为主域名，length为请求列表的长度，sub_domain为子域名，只取前缀即可，record_type为解析类型
-    def get_record(self, domain: str, length: int, sub_domain: str, record_type: str):
+    def get_record(self, domain, length, sub_domain, record_type):
         zone_id = self.get_zone_id(domain)
         if zone_id != "The domain doesn't exist":
             url = 'https://dns.myhuaweicloud.com/v2.1/zones/' + zone_id + '/recordsets?limit=' + str(length)
@@ -61,25 +95,51 @@ class Hwcloud:
             return "The domain doesn't exist"
         r = signer.HttpRequest('GET', url)
         self.sign.Sign(r)
-        res = json.loads(requests.get(url, headers=r.headers).text)
-        records = []
-        recordset_id = ''
-        # print(res)
+        
+        resp = requests.get(url, headers=r.headers)
         try:
-            for i in range(0, len(res['recordsets'])):
-                if res['recordsets'][i]['name'].split('.')[0] == sub_domain and res['recordsets'][i]['type'] == record_type:
-                    records = res['recordsets'][i]['records']
-                    recordset_id = res['recordsets'][i]['id']
-            if records and recordset_id != '':
-                return records, recordset_id
-            else:
-                return "The sub domain doesn't exist"
+          resp.raise_for_status()
+          res = json.loads(resp.content.decode('utf-8','ignore'))
+          #print(res)
         except:
-            return res
+          pass
+        
+        #替换为标准格式
+        # {
+        #   "data":{
+        #     "records":[
+        #       {
+        #         "id":"record_id",
+        #         "line":"线路",
+        #         "value":"ip值"
+        #       }
+        #     ]
+        #   }
+        # }
+        records = []
+        try:
+          for i in range(0, len(res['recordsets'])):
+            #由于华为api的查询参数无法对subdomain和type进行过滤，所以只能在结果中进行判断
+            if res['recordsets'][i]['name'].split('.')[0] == sub_domain and res['recordsets'][i]['type'] == record_type and len(res['recordsets'][i]['records'])>0:
+              for ip in res['recordsets'][i]['records']:
+                records.append({
+                  'id':res['recordsets'][i]['id'],
+                  'line':res['recordsets'][i]['line'],
+                  'value':ip
+                })
+        except:
+            pass
+        print(records)
+        return {
+          "data":{
+            "records": records
+          }
+        }
+        
 
     # 创建解析记录，domain为主域名，sub_domain为子域名，value为记录值，可以列表形式传入多个值,line为线路，为了适配，传入电信/联通/移动即可
     # ttl为生效时间，华为云不限制ttl，默认为300s，最小可1s
-    def create_record(self, domain: str, sub_domain: str, value: list, record_type: str, line: str, ttl: int):
+    def create_record(self, domain: str, sub_domain: str, value: list, record_type: str, line: str, ttl=300):
         zone_id = self.get_zone_id(domain)
         if zone_id != "The domain doesn't exist":
             url = 'https://dns.myhuaweicloud.com/v2.1/zones/' + zone_id + '/recordsets'
@@ -100,19 +160,49 @@ class Hwcloud:
             "ttl": ttl,
             "type": record_type
         }
+        print("准备签名了")
         r = signer.HttpRequest('POST', url, body=json.dumps(data))
         self.sign.Sign(r)
-        res = json.loads(requests.post(url, headers=r.headers, data=r.body).text)
-        # print(res)
-        # print(res['status'])
+        
+        #替换为标准格式
+        # {
+        #   "result":True,
+        #   "message":{...}
+        # }
+        resp = requests.post(url, headers=r.headers, data=r.body)
+        print("post数据")
+        print(resp.text)
         try:
-            if res['status'] == 'PENDING_CREATE':
-                return 'success'
+          resp.raise_for_status()
+          print("更新返回")
+          res = json.loads(resp.content.decode('utf-8','ignore'))
+          data = {}
+          data["result"] = res['id']
+          data["message"] = res['status']
+          if data["message"] == 'PENDING_DELETE':
+            data["message"] = 'success'
+          print("返回数据"+data)
+          return data
+        except HTTPError as httpError:
+          response_status_code = httpError.response.status_code
+          #response_header_params = httpError.response.headers
+          #request_id = response_header_params["X-Request-Id"]
+          response_body = httpError.response.text
+          print('Hppt错误')
+          return {
+            "result": False,
+            "message": "错误码：%s，错误描述：%s" % (response_status_code,response_body)
+          }
         except:
-            return res
+          print("其他错误")
+          pass
+        
+       
 
     # 更改解析记录，domain为主域名，record为解析记录的id，该id可用get_record函数取得，value为记录值，ttl为生效时间。
-    def change_record(self, domain: str, record_id: str, value: str, ttl: int):
+    def change_record(self, domain: str, record_id: str,sub_domain: str, value: str, type:str, line:str, ttl=300):
+
+      #cloud.change_record(domain, info["recordId"], sub_domain, cf_ip, "A", line)
         zone_id = self.get_zone_id(domain)
         if zone_id != "The domain doesn't exist":
             url = 'https://dns.myhuaweicloud.com/v2.1/zones/' + zone_id + '/recordsets/' + record_id
@@ -125,23 +215,32 @@ class Hwcloud:
             "ttl": ttl,
         }
         r = signer.HttpRequest('PUT', url, body=json.dumps(data))
-        self.sign.Sign(r)
-        res = json.loads(requests.put(url, headers=r.headers, data=r.body).text)
-        # print(res)
+        self.sign.Sign(r)        
+        #替换为标准格式
+        # {
+        #   "result":True,
+        #   "message":{...}
+        # }
+        resp = requests.put(url, headers=r.headers, data=r.body)
         try:
-            if res['status'] == 'PENDING_UPDATE' or res['status'] == 'ACTIVE':
-                return 'success'
+          resp.raise_for_status()
+          res = json.loads(resp.content.decode('utf-8','ignore'))
+        except HTTPError as httpError:
+          response_status_code = httpError.response.status_code
+          #response_header_params = httpError.response.headers
+          #request_id = response_header_params["X-Request-Id"]
+          response_body = httpError.response.text
+          return {
+            "result": False,
+            "message": "错误码：%s，错误描述：%s" % (response_status_code,response_body)
+          }
         except:
-            return res
-
-
-if __name__ == '__main__':
-    AK = ''
-    SK = ''
-    api = Hwcloud(AK, SK)
-    # 一些demo
-    # print(api.get_zone_id('ravizhan.top'))
-    # print(api.get_record('ravizhan.top',20,'abc','A'))
-    # print(api.del_record('ravizhan.top','8aace3ba763e2fd50177a570199f5ffe'))
-    # print(api.create_record('ravizhan.top','abc','1.1.1.1','A','联通',1))
-    # print(api.change_record('ravizhan.top','8aace3b9763e2fc70177a98e37357976','1.2.3.4',10))
+          pass
+        
+        data = {}
+        data["result"] = 'id' in res
+        data["message"] = res['status']
+        if data["message"] == 'PENDING_DELETE':
+          data["message"] = 'success'
+        print(data)
+        return data
