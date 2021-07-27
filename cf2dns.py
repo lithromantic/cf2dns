@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Mail: tongdongdong@outlook.com
 import base64
 import hashlib
 import hmac
@@ -10,168 +9,195 @@ import operator
 import json
 import urllib.parse
 import urllib3
-from dns.qCloud import QcloudApi
-from dns.aliyun import AliApi
+#from dns.qCloud import QcloudApi
+#from dns.aliyun import AliApi
+#from dns.dnspod import DnspodApi
+from dns.hwcloud import HWCloudApi
 from log import Logger
 import traceback
+import os
 
 #可以从https://shop.hostmonit.com获取
-KEY = "o1zrmHAF"
+KEY = os.environ["KEY"]  #"o1zrmHAF"
 
 #CM:移动 CU:联通 CT:电信
 #修改需要更改的dnspod域名核子域名
-DOMAINS = {
-    "hostmonit.com": {"@": ["CM","CU","CT"], "shop": ["CM", "CU", "CT"], "stock": ["CM","CU","CT"]},
-    "4096.me": {"@": ["CM","CU","CT"], "vv": ["CM","CU","CT"]}
-}
+DOMAINS = json.loads(os.environ["DOMAINS"])  #{"hostmonit.com": {"@": ["CM","CU","CT"], "shop": ["CM", "CU", "CT"], "stock": ["CM","CU","CT"]},"4096.me": {"@": ["CM","CU","CT"], "vv": ["CM","CU","CT"]}}
+
+#API 密钥 改从各自实现中获取
 
 #解析生效条数 免费的DNSPod相同线路最多支持2条解析
-AFFECT_NUM = 2
-
-#DNS服务商 如果使用DNSPod改为1 如果使用阿里云解析改成2
-DNS_SERVER = 1
-
-#解析生效时间，默认为600秒 如果不是DNS付费版用户 不要修改!!!
-TTL = 600
-
-#API 密钥
-#腾讯云后台获取 https://console.cloud.tencent.com/cam/capi
-#阿里云后台获取 https://help.aliyun.com/document_detail/53045.html?spm=a2c4g.11186623.2.11.2c6a2fbdh13O53  注意需要添加DNS控制权限 AliyunDNSFullAccess
-SECRETID = 'AKIDVmxtxxxxxxxxxxxfo8CzfjgN'
-SECRETKEY = 'ZrVszqxxxxxxxxxxjOp1zVl'
+AFFECT_NUM = 1
 
 log_cf2dns = Logger('cf2dns.log', level='debug') 
 urllib3.disable_warnings()
 
 def get_optimization_ip():
-    try:
-        http = urllib3.PoolManager()
-        headers = headers = {'Content-Type': 'application/json'}
-        data = {"key": KEY}
-        data = json.dumps(data).encode()
-        response = http.request('POST','https://api.hostmonit.com/get_optimization_ip',body=data, headers=headers)
-        return json.loads(response.data.decode('utf-8'))
-    except Exception as e:
-        print(e)
-        return None
+  try:
+    http = urllib3.PoolManager()
+    headers = headers = {'Content-Type': 'application/json'}
+    data = {"key": KEY}
+    data = json.dumps(data).encode()
+    url = 'https://api.hostmonit.com/get_optimization_ip'
+  #  if os.environ["CFIP_API_HOST"]:
+  #    url = os.environ["CFIP_API_HOST"]
+    response = http.request('POST', url=url, body=data, headers=headers)
+    print(json.loads(response.data.decode('utf-8')))
+    return json.loads(response.data.decode('utf-8'))
+  except Exception as e:
+    print(e)
+    return None
 
 def changeDNS(line, s_info, c_info, domain, sub_domain, cloud):
-    global AFFECT_NUM
-    if line == "CM":
-        line = "移动"
-    elif line == "CU":
-        line = "联通"
-    elif line == "CT":
-        line = "电信"
-    else:
-        log_cf2dns.logger.error("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: LINE ERROR")
-        return
-    try:
-        create_num = AFFECT_NUM - len(s_info)
-        if create_num == 0:
-            for info in s_info:
-                if len(c_info) == 0:
-                    break
-                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"]
-                if cf_ip in str(s_info):
-                    continue
-                ret = cloud.change_record(domain, info["recordId"], sub_domain, cf_ip, "A", line, TTL)
-                if(DNS_SERVER != 1 or ret["code"] == 0):
-                    log_cf2dns.logger.info("CHANGE DNS SUCCESS: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip )
-                else:
-                    log_cf2dns.logger.error("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip + "----MESSAGE: " + ret["message"] )
-        elif create_num > 0:
-            for i in range(create_num):
-                if len(c_info) == 0:
-                    break
-                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"]
-                if cf_ip in str(s_info):
-                    continue
-                ret = cloud.create_record(domain, sub_domain, cf_ip, "A", line, TTL)
-                if(DNS_SERVER != 1 or ret["code"] == 0):
-                    log_cf2dns.logger.info("CREATE DNS SUCCESS: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----VALUE: " + cf_ip )
-                else:
-                    log_cf2dns.logger.error("CREATE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip + "----MESSAGE: " + ret["message"] )
+  global AFFECT_NUM
+  if line == "CM":
+    line = "移动"
+  elif line == "CU":
+    line = "联通"
+  elif line == "CT":
+    line = "电信"
+  else:
+    log_cf2dns.logger.error("CHANGE DNS ERROR IN changedns1: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: LINE ERROR")
+    return
+  try:
+    create_num = AFFECT_NUM - len(s_info)
+    if create_num == 0: # 之前设置过2条，则直接修改
+      for info in s_info:
+        if len(c_info) == 0:
+          break
+        cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"] #在cf的优质ip中随机取一个值
+        if cf_ip in str(s_info):
+          continue
+        # {
+        #   "result":True/False,
+        #   "message":...
+        # }
+        ret = cloud.change_record(domain, info["recordId"], sub_domain, cf_ip, "A", line)
+        if ret["result"]:
+          log_cf2dns.logger.info("CHANGE DNS SUCCESS: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip )
         else:
-            for info in s_info:
-                if create_num == 0 or len(c_info) == 0:
-                    break
-                cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"]
-                if cf_ip in str(s_info):
-                    create_num += 1
-                    continue
-                ret = cloud.change_record(domain, info["recordId"], sub_domain, cf_ip, "A", line, TTL)
-                if(DNS_SERVER != 1 or ret["code"] == 0):
-                    log_cf2dns.logger.info("CHANGE DNS SUCCESS: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip )
-                else:
-                    log_cf2dns.logger.error("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip + "----MESSAGE: " + ret["message"] )
-                create_num += 1
-    except Exception as e:
-            log_cf2dns.logger.error("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(e))
+          log_cf2dns.logger.error("CHANGE DNS ERROR IN changedns2: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip + "----MESSAGE: " + str(ret["message"]) )
+    elif create_num > 0:# 当前少于2条，则执行添加操作，下次执行时就会直接修改2条了
+      for i in range(create_num):
+        if len(c_info) == 0:
+          break
+        cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"] #在cf的优质ip中随机取一个值
+        print(cf_ip)
+        if cf_ip in str(s_info):
+          continue
+        ret = cloud.create_record(domain, sub_domain, cf_ip, "A", line)
+        if ret["result"]:
+          log_cf2dns.logger.info("CREATE DNS SUCCESS: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----VALUE: " + cf_ip )
+        else:
+          log_cf2dns.logger.error("CREATE DNS ERROR IN changedns3: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip + "----MESSAGE: " + str(ret["message"]) )
+    else: # <0？？那就强制设置吧
+      for info in s_info:
+        cf_ip = c_info.pop(random.randint(0,len(c_info)-1))["ip"] #在cf的优质ip中随机取一个值
+        if cf_ip in str(s_info):
+          create_num += 1
+          continue
+        ret = cloud.change_record(domain, info["recordId"], sub_domain, cf_ip, "A", line)
+        if ret["result"]:
+          log_cf2dns.logger.info("CHANGE DNS SUCCESS: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip )
+        else:
+          log_cf2dns.logger.error("CHANGE DNS ERROR IN changedns4: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+line+"----RECORDID: " + str(info["recordId"]) + "----VALUE: " + cf_ip + "----MESSAGE: " + str(ret["message"]) )
+        create_num += 1
+  except Exception as e:
+    log_cf2dns.logger.error("CHANGE DNS ERROR IN changedns5: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(e))
 
-def main(cloud):
-    global AFFECT_NUM
-    if len(DOMAINS) > 0:
-        try:
-            cfips = get_optimization_ip()
-            if cfips == None or cfips["code"] != 200:
-                log_cf2dns.logger.error("GET CLOUDFLARE IP ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(cfips["info"]))
-                return
-            cf_cmips = cfips["info"]["CM"]
-            cf_cuips = cfips["info"]["CU"]
-            cf_ctips = cfips["info"]["CT"]
-            for domain, sub_domains in DOMAINS.items():
-                for sub_domain, lines in sub_domains.items():
-                    temp_cf_cmips = cf_cmips.copy()
-                    temp_cf_cuips = cf_cuips.copy()
-                    temp_cf_ctips = cf_ctips.copy()
-                    if DNS_SERVER == 1:
-                        ret = cloud.get_record(domain, 20, sub_domain, "CNAME")
-                        if ret["code"] == 0:
-                            for record in ret["data"]["records"]:
-                                if record["line"] == "移动" or record["line"] == "联通" or record["line"] == "电信":
-                                    retMsg = cloud.del_record(domain, record["id"])
-                                    if(retMsg["code"] == 0):
-                                        log_cf2dns.logger.info("DELETE DNS SUCCESS: ----Time: "  + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+record["line"] )
-                                    else:
-                                        log_cf2dns.logger.error("DELETE DNS ERROR: ----Time: "  + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----DOMAIN: " + domain + "----SUBDOMAIN: " + sub_domain + "----RECORDLINE: "+record["line"] + "----MESSAGE: " + retMsg["message"] )
-                    ret = cloud.get_record(domain, 100, sub_domain, "A")
-                    if DNS_SERVER != 1 or ret["code"] == 0 :
-                        if DNS_SERVER == 1 and "Free" in ret["data"]["domain"]["grade"] and AFFECT_NUM > 2:
-                            AFFECT_NUM = 2
-                        cm_info = []
-                        cu_info = []
-                        ct_info = []
-                        for record in ret["data"]["records"]:
-                            if record["line"] in ("移动","Yidong"):
-                                info = {}
-                                info["recordId"] = record["id"]
-                                info["value"] = record["value"]
-                                cm_info.append(info)
-                            if record["line"] in ("联通","Liantong"):
-                                info = {}
-                                info["recordId"] = record["id"]
-                                info["value"] = record["value"]
-                                cu_info.append(info)
-                            if record["line"] in ("电信","Dianxin"):
-                                info = {}
-                                info["recordId"] = record["id"]
-                                info["value"] = record["value"]
-                                ct_info.append(info)
-                        for line in lines:
-                            if line == "CM":
-                                changeDNS("CM", cm_info, temp_cf_cmips, domain, sub_domain, cloud)
-                            elif line == "CU":
-                                changeDNS("CU", cu_info, temp_cf_cuips, domain, sub_domain, cloud)
-                            elif line == "CT":
-                                changeDNS("CT", ct_info, temp_cf_ctips, domain, sub_domain, cloud)
-        except Exception as e:
-            traceback.print_exc()  
-            log_cf2dns.logger.error("CHANGE DNS ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(e))
+def getDnsApi(dns):
+  if dns == "qCloud":
+    return QcloudApi()
+  elif dns == "aliyun":
+    return AliApi()
+  elif dns == "dnspod":
+    return DnspodApi()
+  elif dns == "hwCloud":
+    return HWCloudApi()
+  return None
+
+def changeip(dns, domains, cfips):
+  try:
+    cf_cmips = cfips["info"]["CM"]
+    cf_cuips = cfips["info"]["CU"]
+    cf_ctips = cfips["info"]["CT"]
+    temp_cf_cmips = cf_cmips.copy()
+    temp_cf_cuips = cf_cuips.copy()
+    temp_cf_ctips = cf_ctips.copy()
+    cloud = getDnsApi(dns)
+    for domain, sub_domains in domains.items():
+      print(domain)
+      print(sub_domains)
+      for sub_domain, lines in sub_domains.items():
+        # {
+        #   "data":{
+        #     "records":[
+        #       {
+        #         "id":"record_id",
+        #         "line":"线路",
+        #         "value":"ip值"
+        #       }
+        #     ]
+        #   }
+        # }
+        # 获取A类型的域名解析
+        ret = cloud.get_record(domain, 100, sub_domain, "A")
+        print(ret)
+        
+        # DNS服务器，每个线路可以配置2条解析记录
+        cm_info = []
+        cu_info = []
+        ct_info = []
+        for record in ret['data']['records']:
+          if record["line"] in ("移动","Yidong"):
+            info = {}
+            info["recordId"] = record["id"]
+            info["value"] = record["value"]
+            cm_info.append(info)
+          #if record["line"] == "联通":
+          if record["line"] in ("联通","Liantong"):
+            info = {}
+            info["recordId"] = record["id"]
+            info["value"] = record["value"]
+            cu_info.append(info)
+          #if record["line"] == "电信":
+          if record["line"] in ("电信","Dianxin"):
+            info = {}
+            info["recordId"] = record["id"]
+            info["value"] = record["value"]
+            ct_info.append(info)
+        print(cm_info,cu_info,ct_info)
+        for line in lines:
+          if line == "CM":
+            #(现有记录，获取cf优化ip，域名，子域名，服务商)
+            changeDNS("CM", cm_info, temp_cf_cmips, domain, sub_domain, cloud)
+          elif line == "CU":
+            changeDNS("CU", cu_info, temp_cf_cuips, domain, sub_domain, cloud)
+          elif line == "CT":
+            changeDNS("CT", ct_info, temp_cf_ctips, domain, sub_domain, cloud)
+  except Exception as e:
+    traceback.print_exc()  
+    log_cf2dns.logger.error("CHANGE DNS ERROR IN DEF-Changeip: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(e))
+
+  
+def main():
+  global AFFECT_NUM
+  if len(DOMAINS) > 0:
+    try:
+      cfips = get_optimization_ip()
+      if cfips == None or cfips["code"] != 200:
+        log_cf2dns.logger.error("GET CLOUDFLARE IP ERROR: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(cfips["info"]))
+        return
+      for dns, domainlist in DOMAINS.items():
+        cloud = getDnsApi(dns)
+        if isinstance(domainlist, list):
+          for domains in domainlist:
+            changeip(dns, domains, cfips)
+        else:
+          changeip(dns, domainlist, cfips)
+    except Exception as e:
+      traceback.print_exc()  
+      log_cf2dns.logger.error("CHANGE DNS ERROR IN Main: ----Time: " + str(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())) + "----MESSAGE: " + str(e))
 
 if __name__ == '__main__':
-    if DNS_SERVER == 1:
-        cloud = QcloudApi(SECRETID, SECRETKEY)
-    elif DNS_SERVER == 2:
-        cloud = AliApi(SECRETID, SECRETKEY)
-    main(cloud)
+  main()
