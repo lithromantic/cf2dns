@@ -143,17 +143,17 @@ def main(cloud):
                         cu_info = []
                         ct_info = []
                         for record in ret["data"]["records"]:
-                            if record["line"] == "移动":
+                            if record["line"] in ("移动","Yidong"):
                                 info = {}
                                 info["recordId"] = record["id"]
                                 info["value"] = record["value"]
                                 cm_info.append(info)
-                            if record["line"] == "联通":
+                            if record["line"] in ("联通","Liantong"):
                                 info = {}
                                 info["recordId"] = record["id"]
                                 info["value"] = record["value"]
                                 cu_info.append(info)
-                            if record["line"] == "电信":
+                            if record["line"] in ("电信","Dianxin"):
                                 info = {}
                                 info["recordId"] = record["id"]
                                 info["value"] = record["value"]
