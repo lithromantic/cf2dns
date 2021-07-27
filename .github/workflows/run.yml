@@ -25,4 +25,6 @@ jobs:
           DOMAINS: ${{ secrets.DOMAINS }}
           SECRETID: ${{ secrets.SECRETID }}
           SECRETKEY: ${{ secrets.SECRETKEY }}
-        run: python cf2dns_actions.py
+          HW_ACCESSKEY_ID: ${{ secrets.HW_ACCESSKEY_ID }}
+          HW_ACCESSKEY_SECRET: ${{ secrets.HW_ACCESSKEY_SECRET }}
+        run: python cf2dns.py
